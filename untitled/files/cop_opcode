@@ -1,0 +1,982 @@
+000: 00    CLRA       ; a=0
+001: 33 5F OGI 15     ; g=1111
+003: 32    RC         ; c=0
+004: 6B EC JSR 3EC
+006: 20    SKC        ; skip if c (not expected, signals internal ram error)
+007: CC    JP 00C
+008: 32    RC         ; c=0
+009: 4F    XAS        ; sk=c, sio <> a
+00A: 22    SC         ; c=1
+00B: CD    JP 00D
+
+00C: 4F    XAS        ; sk=c, sio <> a
+
+00D: 21    SKE        ; check if sio == ram[0] (e.g. 0xf)
+00E: 62 F8 JMP 2F8
+
+; iocop code
+
+;   Memory map:
+;   00-0f fifo
+;   10    tenth
+;   11    sec0
+;   12    sec1
+;   13    min0
+;   14    min1
+;   15    hour0
+;   16    hour1
+;   17    day0
+;   18    day1
+;   19    day2
+;   1a    year
+;   1b    alarm0
+;   1c    alarm1
+;   1d    alarm2
+;   1e    alarm3
+;   1f    alarm4
+;   20-21 mouse horizontal position (msb first)
+;   22    past and present quadrature values on x
+;   23    index of current parameter to set
+;   26    mouse send timer bit3=0 enabled, bit2-0 = remaining time before message, sends on underflow
+;   27-28 ticks counter 1.0 (resets at 4.e)
+;   2c    fifo write position
+;   2e    high nibble to send to the 68000 / high nibble from kbcop
+;   2f    low nibble to send to the 68000 / low nibble from kbcop
+;   30-31 mouse vertical position (msb first)
+;   32    past and present quadrature values on y
+;   33    low indicator bits
+;   34    high indicator bits
+;   35    high nmi nibble
+;   36    low nmi nibble
+;   37    mouse mode
+;   38    ticks counter 2 (saturates), time before startup
+;   39    i/o port, bit 3 = disabled, bit 2 = fifo not empty, bit 0 = route to fifo
+;   3a    temporary used in command management
+;   3b    clock mode (bit2 = system 0, bit 1-0 = 0=off/1=no timer/2=timer interrupt/3=timer power on and interrupt)
+;   3c    temporary
+;   3d    temporary
+
+
+010: 6A 56 JSR 256    ; System off
+012: 20    SKC
+013: D9    JP 019     ; go here on internal ram failure
+014: 8C    JSRP 08C   ; Switch to output
+015: 2D    LBI 2,14
+016: 7F    STII 15
+017: 7E    STII 14
+018: 8F    JSRP 08F   ; Send byte
+
+;   normal iocop loop
+019: 68 40 JSR 040    ; Mouse movement
+01B: 69 FA JSR 1FA    ; Handle command
+01D: 68 77 JSR 077    ; Handle time
+01F: 68 40 JSR 040    ; Mouse movement
+021: 69 24 JSR 124
+023: 68 40 JSR 040    ; Mouse movement
+025: 41    SKT
+026: EB    JP 02B
+027: 6A 7B JSR 27B    ; Count one tick
+029: 69 BE JSR 1BE    ; Mouse message
+02B: 68 FF JSR 0FF    ; Fifo flush
+02D: D9    JP 019
+
+02E: 60 19 JMP 019
+
+; Table of routines depending on current and previous up/down or left/right
+; Polarity is unclear but in fact unimportant
+
+pr.  -- -d u- ud -- -d u- ud -- -d u- ud -- -d u- ud
+cur  -- -- -- -- -d -d -d -d u- u- u- u- ud ud ud ud
+
+030: 73 61 69 73 69 73 73 61 61 73 73 69 73 69 61 73
+
+  61 = +1
+  69 = -1
+  73 = do nothing
+
+; Mouse movement
+040: 08    LBI 0,9    ; b = 0,9
+041: 33 3E OBD        ; D = b.d  // power on, select 0, pb6 = 1
+043: 33 2A ING        ; A = pwrsw, +12V, left, right
+045: 3B    LBI 3,12   ; b = 3,c
+046: 06    X 0        ; A <> ram[3c]
+047: 42    RMB 2      ; ram[3c] &= ~c
+048: 43    RMB 3
+049: 01    SKMBZ 0    ; a += (right ? 4 : 0) + (left ? 8 : 0)
+04A: 54    AISC 4
+04B: 11    SKMBZ 1
+04C: 58    AISC 8
+04D: 33 A2 LBI 2,2    ; b = 2,2
+04F: 9F    JSRP 09F   ; do move
+050: 0A    LBI 0,11   ; b = 0,b
+051: 33 3E OBD        ; D = b.d  // power on, select 1, pb6 = 1
+053: 33 2A ING        ; A = pwrsw, +12V, up, down
+055: 3C    LBI 3,13   ; b = 3,d
+056: 06    X 0        ; A <> ram[3d]
+057: 42    RMB 2      ; ram[3d] &= ~c
+058: 43    RMB 3
+059: 01    SKMBZ 0    ; a += (down ? 4 : 0) + (up ? 8 : 0)
+05A: 54    AISC 4
+05B: 11    SKMBZ 1
+05C: 58    AISC 8
+05D: 33 B2 LBI 3,2    ; b = 3,2
+05F: 9F    JSRP 09F   ; do move
+060: 48    RET
+
+; step +1
+061: 07    XDS 0
+062: 22    SC
+063: 00    CLRA
+064: 30    ASC
+065: EF    JP 06F
+066: 07    XDS 0      ; exit on wrap
+067: E3    JP 063
+068: F0    JP 070
+
+; step -1
+069: 07    XDS 0
+06A: 32    RC
+06B: 00    CLRA
+06C: 5F    AISC 15
+06D: 30    ASC
+06E: F4    JP 074
+06F: 06    X 0
+
+070: 33 A6 LBI 2,6    ; clear bit 3 of ram[26] to indicate the change of position
+072: 43    RMB 3
+
+; nop
+073: 48    RET
+
+074: 07    XDS 0      ; exit on wrap
+075: EB    JP 06B
+076: F0    JP 070
+
+
+; Handle time
+077: 33 03 SKGBZ 2
+079: 48    RET
+07A: A3    JSRP 0A3   ; wait one tick
+07B: 33 03 SKGBZ 2
+07D: 48    RET
+07E: 62 53 JMP 253
+
+080: 23 A9 XAD 2,9
+082: 51    AISC 1
+083: 44    NOP
+084: 5F    AISC 15
+085: 89    JP 089
+086: 23 A9 XAD 2,9
+088: DB    JP 0DB
+089: 23 A9 XAD 2,9
+08B: DF    JP 0DF
+
+; Send 0x80
+08C: 2D    LBI 2,14
+08D: 78    STII 8     ; ram[2e] = 8
+08E: 70    STII 0     ; ram[2f] = 0
+
+; Send byte
+08F: 38    LBI 3,9
+090: 01    SKMBZ 0
+091: CD    JP 0CD     ; Fifo push
+092: 4D    SMB 0
+093: 2D    LBI 2,14
+094: 04    XIS 0
+095: 33 3C CAMQ       ; q = 
+097: 33 65 LEI 5      ; sio = counter, load l from q, so=0 (so goes to ca1)
+099: 33 6D LEI 13     ; sio = counter, load l from q, so=1
+09B: 33 61 LEI 1      ; sio = counter, l hi-Z, so=0
+09D: 44    NOP
+09E: 48    RET
+
+; do mouse move by jumping to appropriate routine
+; memory has top two bits as new value and bottom two as previous value
+09F: 06    X 0
+0A0: 00    CLRA
+0A1: 53    AISC 3
+0A2: FF    JID
+
+; wait one tick
+0A3: 41    SKT        ; wait for timer
+0A4: A3    JP 0A3
+0A5: 62 7B JMP 27B
+
+; KB send 80
+0A7: 3D    LBI 3,14
+0A8: 78    STII 8
+0A9: 70    STII 0
+
+; KB send byte
+0AA: 3D    LBI 3,14
+0AB: 33 01 SKGBZ 0
+0AD: AB    JP 0AB     ; wait until g0 = 1
+0AE: 33 01 SKGBZ 0
+0B0: B2    JP 0B2     ; wait until g0 = 0
+0B1: AE    JP 0AE
+0B2: 33 01 SKGBZ 0    ; wait shortly for g0 = 1
+0B4: DD    JP 0DD
+0B5: 22    SC
+0B6: 4F    XAS        ; sk = 1  (-> drop to 0)
+0B7: 32    RC
+0B8: 01    SKMBZ 0
+0B9: 22    SC
+0BA: 4F    XAS        ; sk = !bit 0/4
+0BB: 32    RC
+0BC: 11    SKMBZ 1    
+0BD: 22    SC
+0BE: 4F    XAS        ; sk = !bit 1/5
+0BF: 32    RC
+0C0: 03    SKMBZ 2
+0C1: 22    SC
+0C2: 4F    XAS        ; sk = !bit 2/6
+0C3: 32    RC
+0C4: 13    SKMBZ 3
+0C5: 22    SC
+0C6: 4F    XAS        ; sk = !bit 3/7
+0C7: 06    X 0
+0C8: 04    XIS 0
+0C9: B7    JP 0B7
+0CA: 32    RC
+0CB: 4F    XAS        ; sk = 0
+0CC: 48    RET
+
+; Fifo push
+0CD: 46    SMB 2
+0CE: 2B    LBI 2,12
+0CF: 05    LD 0
+0D0: 52    AISC 2
+0D1: 44    NOP
+0D2: 06    X 0
+0D3: 05    LD 0
+0D4: 0F    LBI 0,0
+0D5: 50    CAB
+0D6: 23 2E LDD 2,14
+0D8: 04    XIS 0
+0D9: 23 2F LDD 2,15
+0DB: 06    X 0
+0DC: 48    RET
+
+0DD: 60 B5 JMP 0B5
+
+0DF: 02    XOR
+0E0: 23 AD XAD 2,13
+0E2: 23 2D LDD 2,13
+0E4: 06    X 0
+0E5: 23 AC XAD 2,12
+0E7: 33 2A ING
+0E9: 21    SKE
+0EA: F7    JP 0F7
+0EB: 00    CLRA
+0EC: 51    AISC 1
+0ED: EC    JP 0EC
+0EE: 33 2A ING
+0F0: 21    SKE
+0F1: F7    JP 0F7
+0F2: 23 2C LDD 2,12
+0F4: 06    X 0
+0F5: 00    CLRA
+0F6: 49    RETSK
+0F7: 06    X 0
+0F8: 23 2C LDD 2,12
+0FA: 02    XOR
+0FB: 06    X 0
+0FC: 23 2C LDD 2,12
+0FE: 48    RET
+
+; Fifo flush
+0FF: 33 60 LEI 0
+101: 38    LBI 3,9
+102: 01    SKMBZ 0
+103: 13    SKMBZ 3
+104: 48    RET
+105: 32    RC
+106: 4F    XAS
+107: 5F    AISC 15
+108: CA    JP 10A
+109: 48    RET
+
+; Fifo send if needed
+10A: 03    SKMBZ 2
+10B: D4    JP 114
+10C: 4C    RMB 0
+10D: 00    CLRA
+10E: 23 A4 XAD 2,4
+110: 51    AISC 1
+111: 48    RET
+112: 62 39 JMP 239
+114: 2C    LBI 2,13
+115: 05    LD 0
+116: 52    AISC 2
+117: 44    NOP
+118: 07    XDS 0
+119: 23 2D LDD 2,13
+11B: 21    SKE
+11C: DF    JP 11F
+11D: 38    LBI 3,9
+11E: 42    RMB 2
+11F: 0F    LBI 0,0
+120: 50    CAB
+121: 04    XIS 0
+122: 60 95 JMP 095    ; send the byte
+
+; Read keyboard and mouse buttons
+124: 3E    LBI 3,15
+125: 33 3E OBD        ; power on, select 3, pb6 = 1
+127: 38    LBI 3,9
+128: 03    SKMBZ 2
+129: EB    JP 12B
+12A: F3    JP 133
+
+;  bytes in fifo already
+12B: 23 2C LDD 2,12
+12D: 2C    LBI 2,13
+12E: 22    SC
+12F: 10    CASC
+130: 44    NOP
+131: 58    AISC 8
+132: 48    RET
+
+;  fifo empty
+133: 33 01 SKGBZ 0    ; Check if kbd is zero, e.g. sending request
+135: F8    JP 138
+136: 61 83 JMP 183
+138: 23 38 LDD 3,8
+13A: 51    AISC 1
+13B: 61 8D JMP 18D    ; Only do it after bootup time
+13D: 33 61 LEI 1
+13F: 22    SC
+140: 3D    LBI 3,14
+141: 4F    XAS        ; sk = 1
+142: 23 33 LDD 3,3
+144: 04    XIS 0
+145: 32    RC
+146: 4F    XAS        ; sk = 0
+147: 23 34 LDD 3,4
+149: 06    X 0
+14A: 2D    LBI 2,14   ; Read a byte serially from the keyboard (kbd line)
+14B: 33 01 SKGBZ 0
+14D: FD    JP 17D
+14E: 4D    SMB 0
+14F: 33 01 SKGBZ 0
+151: 4C    RMB 0
+152: 47    SMB 1
+153: 33 01 SKGBZ 0
+155: 45    RMB 1
+156: 46    SMB 2
+157: 33 01 SKGBZ 0
+159: 42    RMB 2
+15A: 4B    SMB 3
+15B: 33 01 SKGBZ 0
+15D: 43    RMB 3
+15E: 06    X 0
+15F: 04    XIS 0
+160: CE    JP 14E
+161: 33 B5 LBI 3,5 
+163: 33 01 SKGBZ 0
+165: E8    JP 168
+166: 61 83 JMP 183
+168: 13    SKMBZ 3
+169: ED    JP 16D
+16A: 8F    JSRP 08F   ; Send byte
+16B: 61 33 JMP 133
+16D: 23 2E LDD 2,14
+16F: 21    SKE
+170: EA    JP 16A
+171: 2E    LBI 2,15
+172: 23 36 LDD 3,6
+174: 21    SKE
+175: EA    JP 16A
+176: A3    JSRP 0A3   ; wait one tick
+177: 33 5B OGI 11
+179: A3    JSRP 0A3   ; wait one tick
+17A: 33 5F OGI 15
+17C: 48    RET
+17D: 3D    LBI 3,14
+17E: 33 01 SKGBZ 0
+180: C2    JP 182
+181: B5    JSRP 0B5
+182: CD    JP 18D
+183: 00    CLRA
+184: 23 B8 XAD 3,8
+186: 51    AISC 1
+187: CD    JP 18D
+188: 8C    JSRP 08C   ; Send 0x80
+189: 2D    LBI 2,14
+18A: 7F    STII 15
+18B: 7D    STII 13
+18C: 8F    JSRP 08F   ; Send byte
+18D: 2E    LBI 2,15
+18E: 75    STII 5
+18F: 28    LBI 2,9
+190: 33 11 SKGBZ 1
+192: E0    JP 1A0
+193: 01    SKMBZ 0
+194: D7    JP 197
+195: 45    RMB 1
+196: EC    JP 1AC
+197: 11    SKMBZ 1
+198: DE    JP 19E
+199: 4C    RMB 0
+19A: 2D    LBI 2,14
+19B: 78    STII 8
+19C: 60 8F JMP 08F
+19E: 45    RMB 1
+19F: EC    JP 1AC
+1A0: 01    SKMBZ 0
+1A1: EB    JP 1AB
+1A2: 11    SKMBZ 1
+1A3: E6    JP 1A6
+1A4: 47    SMB 1
+1A5: EC    JP 1AC
+1A6: 4D    SMB 0
+1A7: 2D    LBI 2,14
+1A8: 70    STII 0
+1A9: 60 8F JMP 08F
+1AB: 47    SMB 1
+1AC: 2E    LBI 2,15
+1AD: 11    SKMBZ 1
+1AE: F8    JP 1B8
+1AF: 76    STII 6
+1B0: 2C    LBI 2,13
+1B1: 33 3E OBD
+1B3: 29    LBI 2,10
+1B4: 33 01 SKGBZ 0
+1B6: E0    JP 1A0
+1B7: D3    JP 193
+1B8: 01    SKMBZ 0
+1B9: 62 6E JMP 26E
+1BB: 77    STII 7
+1BC: 2A    LBI 2,11
+1BD: D0    JP 190
+
+; Mouse message
+1BE: 33 B7 LBI 3,7    ; Test if mouse is active
+1C0: 13    SKMBZ 3
+1C1: C3    JP 1C3
+1C2: 48    RET
+1C3: 33 A6 LBI 2,6    ; test if mouse timer is active (e.g. mouse has moved)
+1C5: 13    SKMBZ 3
+1C6: 48    RET
+1C7: 05    LD 0       ; decrement timer, return if not done
+1C8: 5F    AISC 15
+1C9: CC    JP 1CC
+1CA: 06    X 0
+1CB: 48    RET
+1CC: 38    LBI 3,9    ; timer done, test if i/o is active
+1CD: 01    SKMBZ 0
+1CE: 48    RET
+1CF: 23 37 LDD 3,7
+1D1: 23 A6 XAD 2,6    ; reset timer to base value and reset moved flag
+1D3: 2D    LBI 2,14
+1D4: 70    STII 0
+1D5: 70    STII 0
+1D6: 8F    JSRP 08F   ; Send byte 00
+1D7: 2F    LBI 2,0    ; Send X
+1D8: 69 DB JSR 1DB
+1DA: 3F    LBI 3,0    ; Send Y
+1DB: 05    LD 0
+1DC: 70    STII 0     ; clear value as it is sent
+1DD: 23 AE XAD 2,14
+1DF: 05    LD 0
+1E0: 70    STII 0
+1E1: 23 AF XAD 2,15
+1E3: 60 8F JMP 08F
+
+// Goes there after memory clear @ 3e5
+// Check if the memory clear went well, returns c=1 if no, c=0 if yes
+1E5: 0F    LBI 0,0    ; b = 0.0
+1E6: 41    SKT
+1E7: E6    JP 1E6     ; wait timer
+1E8: 15    LD 1       ; a=ram[b], b.r ^= 1
+1E9: 51    AISC 1     ; add 1
+1EA: 22    SC         ; c=1 if not carry (expects not carry)
+1EB: 35    LD 3       ; same at 0x10+n
+1EC: 51    AISC 1
+1ED: 22    SC
+1EE: 15    LD 1
+1EF: 5F    AISC 15
+1F0: F2    JP 1F2
+1F1: 22    SC
+1F2: 05    LD 0
+1F3: 5F    AISC 15
+1F4: F6    JP 1F6
+1F5: 22    SC
+1F6: 05    LD 0
+1F7: 34    XIS 3
+1F8: E6    JP 1E6
+1F9: 48    RET
+
+; Handle command
+1FA: 33 81 LBI 0,1
+1FC: 33 3E OBD        ; power on, select 0, pb6 = 0
+1FE: 38    LBI 3,9
+1FF: 33 3E OBD        ; power on, select 0, pb6 = 1
+201: 39    LBI 3,10
+202: 33 2E INL        ; ram[3a] = L7-4, A = L3-0 (pa of the 6522)
+204: 13    SKMBZ 3
+205: 48    RET        ; return if pa7 = 1
+206: 06    X 0
+207: 5D    AISC 13
+208: CF    JP 20F     ; i/o port or clock command
+209: 53    AISC 3     ; write to kbd or nmi, 3=low indicator, 4=high indicator, 5=high nmi, 6=low nmi
+20A: 50    CAB        ; B=3.cmd (33-36)
+20B: 23 3A LDD 3,10   ; get parameter
+20D: 06    X 0        ; write to appropriate 33-36 (also used by clock parameter setting)
+20E: 48    RET
+
+20F: 51    AISC 1     ; i/o port, read clock data, write to clock, set clock modes
+210: DB    JP 21B
+211: 04    XIS 0      ; set clock modes
+212: 06    X 0
+213: 03    SKMBZ 2
+214: D7    JP 217
+215: 62 56 JMP 256    ; System off
+217: 33 A3 LBI 2,3
+219: 7F    STII 15
+21A: 48    RET
+
+21B: 51    AISC 1     ; i/o port, read clock data, write to clock
+21C: F3    JP 233
+21D: 3A    LBI 3,11   ; write parameter to clock
+21E: 13    SKMBZ 3
+21F: E1    JP 221
+220: 48    RET
+221: 33 A3 LBI 2,3
+223: 05    LD 0
+224: 5F    AISC 15
+225: 44    NOP
+226: 36    X 3
+227: CA    JP 20A
+
+228: 33 A4 LBI 2,4
+22A: 7F    STII 15
+22B: 48    RET
+
+22C: 43    RMB 3      ; i/o port (enabled)
+22D: 51    AISC 1
+22E: 61 0A JMP 10A    ; enabled, send bytes present in fifo if needed
+230: 4B    SMB 3      ; i/o port disabled
+231: 4D    SMB 0      ; route bytes to fifo
+232: 48    RET
+
+233: 05    LD 0       ; i/o port, read clock data.  Reread the parameter (which is the command)
+234: 38    LBI 3,9
+235: 5E    AISC 14
+236: EC    JP 22C
+237: 01    SKMBZ 0    ; read clock data, test i/o port activity
+238: E8    JP 228
+239: 8C    JSRP 08C   ; Send 0x80
+23A: 2D    LBI 2,14
+23B: 7E    STII 14    ; high = E
+23C: 23 1A LDD 1,10
+23E: 06    X 0        ; low = ram[1a] = year
+23F: 8F    JSRP 08F   ; Send byte
+240: 39    LBI 3,10
+241: 7B    STII 11    ; ram[3a] = b
+242: 39    LBI 3,10
+243: 05    LD 0
+244: 5E    AISC 14    ; ram[3a] -= 2
+245: 48    RET        ; return when ram[3a] < 0
+246: 06    X 0
+247: 05    LD 0
+248: 1F    LBI 1,0
+249: 50    CAB        ; b = 1,ram[3a]
+24A: 05    LD 0       ; load and decrement
+24B: 07    XDS 0
+24C: 23 AE XAD 2,14   ; store in 2e
+24E: 05    LD 0       ; load again (after address decrement)
+24F: 23 AF XAD 2,15   ; store in 2f
+251: 8F    JSRP 08F   ; Send byte
+252: C2    JP 242     ; loop until all sent
+
+253: 33 03 SKGBZ 2
+255: 48    RET
+
+; System off
+; wait for power switch to be pressed, turn the system on
+256: 38    LBI 3,9    ; b = 3,9
+257: 4B    SMB 3      ; ram[b] |= 8
+258: 4D    SMB 0      ; ram[b] |= 1
+259: A3    JSRP 0A3   ; wait one tick
+25A: 0F    LBI 0,0    ; b = 0,0
+25B: 33 3E OBD        ; D = b.d  // power off, select 0, pb6 = 0
+25D: A3    JSRP 0A3   ; wait one tick
+25E: 33 13 SKGBZ 3    ; skip if g3 = 0 (pwrsw)
+260: DD    JP 25D
+261: A3    JSRP 0A3   ; wait one tick
+262: 33 13 SKGBZ 3    ; again
+264: DD    JP 25D
+265: 28    LBI 2,9    ; b = 2,9
+266: 73    STII 3     ; ram[b] = 3, b.d++
+267: 73    STII 3     ; ram[b] = 3, b.d++
+268: 73    STII 3     ; ram[b] = 3, b.d++
+269: 3A    LBI 3,11   ; b = 3,b
+26A: 46    SMB 2      ; ram[b] |= 4 // system is on
+26B: 33 3E OBD        ; D = b.d  // power on, select 0, pb6 = 1
+26D: F6    JP 276
+
+26E: 33 13 SKGBZ 3
+270: 48    RET
+271: 8C    JSRP 08C   ; Send 0x80
+272: 2D    LBI 2,14
+273: 7F    STII 15
+274: 7B    STII 11
+275: 8F    JSRP 08F   ; Send byte
+
+276: 33 13 SKGBZ 3    ; wait for power switch to be released
+278: 48    RET
+279: A3    JSRP 0A3   ; wait one tick
+27A: F6    JP 276
+
+; Count one tick on the 200Hz clock
+27B: 33 A7 LBI 2,7    ; b = 2,7
+27D: 05    LD 0       ; a = ram[b]
+27E: 51    AISC 1     ; a ++, skip on carry
+27F: E6    JP 2A6
+280: 74    STII 4     ; reset 27 at 4 on overflow, b.d++
+281: 05    LD 0
+282: 51    AISC 1
+283: E6    JP 2A6
+284: 7E    STII 14    ; reset 28 at e on overflow
+285: 23 38 LDD 3,8    ; increment 38
+287: 51    AISC 1
+288: 23 B8 XAD 3,8    ; exchange except on overflow
+28A: 3A    LBI 3,11
+28B: 01    SKMBZ 0
+28C: D0    JP 290
+28D: 11    SKMBZ 1
+28E: D0    JP 290
+28F: E7    JP 2A7     ; exit if clock is off
+
+290: 1F    LBI 1,0
+291: 6A D7 JSR 2D7
+293: E7    JP 2A7
+
+294: 3A    LBI 3,11
+295: 11    SKMBZ 1
+296: 62 E0 JMP 2E0
+298: 33 91 LBI 1,1
+29A: 6A D7 JSR 2D7
+29C: E7    JP 2A7
+29D: 5B    AISC 11
+29E: E4    JP 2A4
+29F: 04    XIS 0
+2A0: 6A D7 JSR 2D7
+2A2: E7    JP 2A7
+2A3: 5B    AISC 11
+2A4: 56    AISC 6
+2A5: E8    JP 2A8
+2A6: 06    X 0        ; store low counter
+2A7: 48    RET
+
+2A8: 04    XIS 0
+2A9: 6A D7 JSR 2D7
+2AB: EE    JP 2AE
+2AC: 51    AISC 1
+2AD: E6    JP 2A6
+2AE: 23 16 LDD 1,6
+2B0: 5E    AISC 14
+2B1: 48    RET
+2B2: 05    LD 0
+2B3: 5C    AISC 12
+2B4: 48    RET
+2B5: 70    STII 0
+2B6: 70    STII 0
+2B7: 6A D7 JSR 2D7
+2B9: FE    JP 2BE
+2BA: 6A D7 JSR 2D7
+2BC: 48    RET
+2BD: FA    JP 2BA
+2BE: 23 19 LDD 1,9
+2C0: 5D    AISC 13
+2C1: 48    RET
+2C2: 23 18 LDD 1,8
+2C4: 5A    AISC 10
+2C5: 48    RET
+2C6: 05    LD 0
+2C7: 19    LBI 1,10
+2C8: 01    SKMBZ 0
+2C9: CB    JP 2CB
+2CA: 11    SKMBZ 1
+2CB: 51    AISC 1
+2CC: 59    AISC 9
+2CD: 48    RET
+2CE: 33 97 LBI 1,7
+2D0: 71    STII 1
+2D1: 70    STII 0
+2D2: 70    STII 0
+2D3: 05    LD 0
+2D4: 51    AISC 1
+2D5: 44    NOP
+2D6: DB    JP 2DB
+2D7: 05    LD 0
+2D8: 57    AISC 7
+2D9: 5A    AISC 10
+2DA: DD    JP 2DD
+2DB: 06    X 0
+2DC: 48    RET
+2DD: 04    XIS 0
+2DE: 05    LD 0
+2DF: 49    RETSK
+2E0: 1A    LBI 1,11
+2E1: 32    RC
+2E2: 00    CLRA
+2E3: 5F    AISC 15
+2E4: 30    ASC
+2E5: E9    JP 2E9
+2E6: 06    X 0
+2E7: 62 98 JMP 298
+2E9: 04    XIS 0
+2EA: E2    JP 2E2
+2EB: 3A    LBI 3,11
+2EC: 45    RMB 1
+2ED: 01    SKMBZ 0
+2EE: 33 3E OBD
+2F0: 4D    SMB 0
+2F1: 8C    JSRP 08C   ; Send 0x80
+2F2: 2D    LBI 2,14
+2F3: 7F    STII 15
+2F4: 7C    STII 12
+2F5: 8F    JSRP 08F   ; Send byte
+2F6: 62 98 JMP 298
+
+
+---------------------------------------------------------------------------------------------------------------------------------
+
+; kbcop (sio != 0xf)
+
+; Memory map
+; 3e    high nibble to iocop
+; 3f    low nibble to iocop
+
+
+2F8: 33 69 LEI 9      ; so=1
+2FA: 33 13 SKGBZ 3    ; g3=0 means reset
+2FC: 63 05 JMP 305
+2FE: 0F    LBI 0,0
+2FF: 33 2E INL
+301: 3F    LBI 3,0
+302: 50    CAB
+303: 63 F9 JMP 3F9
+
+305: 20    SKC
+306: CC    JP 30C
+
+  ; internal ram failure, send 80 ff
+307: A7    JSRP 0A7   ; KB send 80
+308: 3D    LBI 3,14
+309: 7F    STII 15
+30A: 7F    STII 15
+30B: AA    JSRP 0AA   ; KB send byte (ff)
+
+30C: 32    RC
+30D: 7F    STII 15    ; ram[00] = f
+30E: 33 3E OBD        ; D = 1
+310: 7F    STII 15    ; ram[01] = f
+311: 33 3E OBD        ; D = 2
+313: 4F    XAS        ; sk = 0, a = serial
+314: 29    LBI 2,10
+315: 06    X 0        ; ram[2a] = a
+316: A7    JSRP 0A7   ; KB send 80
+317: 29    LBI 2,10
+318: 00    CLRA
+319: 21    SKE
+31A: E1    JP 321
+31B: 3D    LBI 3,14   ; Read keyboard ID from L
+31C: 33 2E INL
+31E: 23 BF XAD 3,15
+320: E6    JP 326
+321: 51    AISC 1     ; here if serial != 0, but that's required to be kbcop?
+322: 06    X 0
+323: 3D    LBI 3,14   ; Send D<serial+1)
+324: 7D    STII 13
+325: 06    X 0
+326: AA    JSRP 0AA   ; KB send byte (kbd ID)
+327: 33 61 LEI 1      ; so = 0
+329: 0E    LBI 0,15
+32A: 22    SC
+32B: 4F    XAS        ; kbd = 0
+32C: 33 3E OBD        ; D = f
+32E: 33 2A ING        ; A = G
+330: 21    SKE
+331: 63 7D JMP 37D
+333: 07    XDS 0
+334: EC    JP 32C
+335: 20    SKC
+336: E9    JP 329
+337: 32    RC
+338: 4F    XAS
+339: 41    SKT
+33A: 63 49 JMP 349
+33C: 28    LBI 2,9
+33D: 05    LD 0
+33E: 51    AISC 1
+33F: 04    XIS 0
+340: 29    LBI 2,10
+341: 01    SKMBZ 0
+342: C4    JP 344
+343: C9    JP 349
+344: 2A    LBI 2,11
+345: 05    LD 0
+346: 5F    AISC 15
+347: CC    JP 34C
+348: 06    X 0
+349: 1E    LBI 1,15
+34A: 63 2C JMP 32C
+34C: 06    X 0
+34D: 33 6D LEI 13
+34F: 33 01 SKGBZ 0
+351: CF    JP 34F
+352: 33 01 SKGBZ 0
+354: D6    JP 356
+355: D2    JP 352
+356: 33 01 SKGBZ 0
+358: 9D    JSRP 09D
+359: 9E    JSRP 09E
+35A: 9D    JSRP 09D
+35B: 22    SC
+35C: 4F    XAS
+35D: 9E    JSRP 09E
+35E: 32    RC
+35F: 4F    XAS
+360: 9D    JSRP 09D
+361: 2D    LBI 2,14
+362: 4C    RMB 0
+363: 33 01 SKGBZ 0
+365: 4D    SMB 0
+366: 45    RMB 1
+367: 33 01 SKGBZ 0
+369: 47    SMB 1
+36A: 42    RMB 2
+36B: 33 01 SKGBZ 0
+36D: 46    SMB 2
+36E: 43    RMB 3
+36F: 33 01 SKGBZ 0
+371: 4B    SMB 3
+372: 06    X 0
+373: 04    XIS 0
+374: E2    JP 362
+375: 33 65 LEI 5
+377: 2D    LBI 2,14
+378: 23 2F LDD 2,15
+37A: 33 3C CAMQ
+37C: C9    JP 349
+37D: 02    XOR
+37E: 06    X 0
+37F: 01    SKMBZ 0
+380: C9    JP 389
+381: 11    SKMBZ 1
+382: D4    JP 394
+383: 03    SKMBZ 2
+384: E1    JP 3A1
+385: 13    SKMBZ 3
+386: F0    JP 3B0
+387: 63 33 JMP 333
+389: 06    X 0
+38A: 01    SKMBZ 0
+38B: D0    JP 390
+38C: 80    JSRP 080
+38D: C1    JP 381
+38E: 4D    SMB 0
+38F: E8    JP 3A8
+390: 8B    JSRP 08B
+391: C1    JP 381
+392: 4C    RMB 0
+393: EE    JP 3AE
+394: 06    X 0
+395: 11    SKMBZ 1
+396: DC    JP 39C
+397: 80    JSRP 080
+398: C3    JP 383
+399: 47    SMB 1
+39A: 52    AISC 2
+39B: E8    JP 3A8
+39C: 8B    JSRP 08B
+39D: C3    JP 383
+39E: 45    RMB 1
+39F: 52    AISC 2
+3A0: EE    JP 3AE
+3A1: 06    X 0
+3A2: 03    SKMBZ 2
+3A3: EA    JP 3AA
+3A4: 80    JSRP 080
+3A5: C5    JP 385
+3A6: 46    SMB 2
+3A7: 54    AISC 4
+3A8: 63 D2 JMP 3D2
+3AA: 8B    JSRP 08B
+3AB: C5    JP 385
+3AC: 42    RMB 2
+3AD: 54    AISC 4
+3AE: 63 CB JMP 3CB
+3B0: 06    X 0
+3B1: 13    SKMBZ 3
+3B2: 63 C6 JMP 3C6
+3B4: 20    SKC
+3B5: F7    JP 3B7
+3B6: FD    JP 3BD
+3B7: 13    SKMBZ 3
+3B8: FA    JP 3BA
+3B9: FD    JP 3BD
+3BA: 03    SKMBZ 2
+3BB: 63 C0 JMP 3C0
+3BD: 80    JSRP 080
+3BE: C7    JP 387
+3BF: C3    JP 383
+3C0: 8B    JSRP 08B
+3C1: 63 87 JMP 387
+3C3: 4B    SMB 3
+3C4: 56    AISC 6
+3C5: D2    JP 3D2
+3C6: 8B    JSRP 08B
+3C7: 63 87 JMP 387
+3C9: 43    RMB 3
+3CA: 56    AISC 6
+3CB: 23 A9 XAD 2,9
+3CD: 00    CLRA
+3CE: 57    AISC 7
+3CF: 23 A9 XAD 2,9
+3D1: 58    AISC 8
+3D2: 20    SKC
+3D3: 51    AISC 1
+3D4: 23 BE XAD 3,14
+3D6: 4E    CBA
+3D7: 23 BF XAD 3,15
+3D9: 32    RC
+3DA: 4F    XAS
+3DB: 29    LBI 2,10
+3DC: 01    SKMBZ 0
+3DD: E5    JP 3E5
+3DE: 33 69 LEI 9
+3E0: AA    JSRP 0AA   ; KB send byte
+3E1: 33 61 LEI 1
+3E3: 63 29 JMP 329
+3E5: 33 6D LEI 13
+3E7: AA    JSRP 0AA   ; KB send byte
+3E8: 33 65 LEI 5
+3EA: 63 29 JMP 329
+
+// memset(ram:0, 0x0f, 0x20); memset(ram:0x20, 0x00, 0x20)
+
+3E C: 0F    LBI 0,0    ; b = 0,0
+
+3ED: 00    CLRA       ; a = 0
+3EE: 5F    AISC 15    ; a += 15
+3EF: 06    X 0        ; a <> ram[b]
+3F0: 15    LD 1       ; a = ram[b], b.r ^= 1
+3F1: 36    X 3        ; a <> ram[b], b.r ^= 3
+3F2: 00    CLRA       ; a = 0
+3F3: 16    X 1        ; a <> ram[b], b.r ^= 1
+3F4: 00    CLRA       ; a = 0
+3F5: 34    XIS 3      ; a <> ram[b], b.r ^= 1, b.d += 1, skip on overflow
+3F6: ED    JP 3ED
+3F7: 61 E5 JMP 1E5
+
+
+
+3F9: 23 00 LDD 0,0
+3FB: 06    X 0
+3FC: 3F    LBI 3,0
+3FD: AB    JSRP 0AB
+3FE: 33 60 LEI 0
